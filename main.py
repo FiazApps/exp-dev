@@ -13,6 +13,9 @@ led14 = Pin(14, Pin.OUT)
 led16 = PWM(Pin(16))
 led16.freq(1000)
 
+# GP17 - OTA update check LED
+led17 = Pin(17, Pin.OUT)
+
 print("Runtime started")
 
 # Flash GP14 5 times to indicate startup
@@ -29,7 +32,7 @@ print("Service running")
 # -----------------------------
 # Periodic OTA update settings
 # -----------------------------
-UPDATE_INTERVAL = 60 * 2  # seconds (2 minutes)
+UPDATE_INTERVAL = 60 * 10  # seconds (10 minutes)
 last_update_check = time.time()  # track last update check
 
 # -----------------------------
@@ -47,5 +50,9 @@ while True:
     # Check if it's time to run the OTA update check
     current_time = time.time()
     if current_time - last_update_check >= UPDATE_INTERVAL:
-        ota.check_for_update()  # GP15 will flash if update activity occurs
+        # Turn GP17 ON to indicate OTA check is running
+        led17.on()
+        ota.check_for_update()  # GP15 will also flash if download occurs
+        # Turn GP17 OFF after update check completes
+        led17.off()
         last_update_check = current_time
