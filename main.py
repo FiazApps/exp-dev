@@ -40,12 +40,12 @@ last_update_check = time.time()  # track last update check
 # -----------------------------
 while True:
     # Breathing LED on GP16
-    for duty in range(0, 65535, 2000):
+    for duty in range(0, 65535, 4000):
         led16.duty_u16(duty)
         time.sleep(0.02)
     for duty in range(65535, 0, -2000):
         led16.duty_u16(duty)
-        time.sleep(0.02)
+        time.sleep(0.01)
 
     # Check if it's time to run the OTA update check
     current_time = time.time()
