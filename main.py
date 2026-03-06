@@ -1,7 +1,12 @@
 import time
 from machine import Pin, PWM
+import ota
 
-# GP14 - startup LED
+# -----------------------------
+# LED setup
+# -----------------------------
+
+# GP14 - startup/service LED
 led14 = Pin(14, Pin.OUT)
 
 # GP16 - breathing LED
@@ -17,18 +22,30 @@ for i in range(5):
     led14.off()
     time.sleep(0.3)
 
-# Turn GP14 on permanently when service is running
+# Turn GP14 solid ON when service is running
 led14.on()
-
 print("Service running")
 
-# --- Main loop with GP16 breathing ---
+# -----------------------------
+# Periodic OTA update settings
+# -----------------------------
+UPDATE_INTERVAL = 60 * 2  # seconds (2 minutes)
+last_update_check = time.time()  # track last update check
+
+# -----------------------------
+# Main loop
+# -----------------------------
 while True:
-    # Fade in
+    # Breathing LED on GP16
     for duty in range(0, 65535, 2000):
         led16.duty_u16(duty)
         time.sleep(0.02)
-    # Fade out
     for duty in range(65535, 0, -2000):
         led16.duty_u16(duty)
         time.sleep(0.02)
+
+    # Check if it's time to run the OTA update check
+    current_time = time.time()
+    if current_time - last_update_check >= UPDATE_INTERVAL:
+        ota.check_for_update()  # GP15 will flash if update activity occurs
+        last_update_check = current_time
