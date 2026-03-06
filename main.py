@@ -1,21 +1,34 @@
 import time
-from machine import Pin
+from machine import Pin, PWM
 
-# Setup LED on GP14
-led = Pin(14, Pin.OUT)
+# GP14 - startup LED
+led14 = Pin(14, Pin.OUT)
+
+# GP16 - breathing LED
+led16 = PWM(Pin(16))
+led16.freq(1000)
 
 print("Runtime started")
 
-# Flash LED 5 times to indicate startup
+# Flash GP14 5 times to indicate startup
 for i in range(5):
-    led.on()
+    led14.on()
     time.sleep(0.3)
-    led.off()
+    led14.off()
     time.sleep(0.3)
 
-# Turn LED on permanently when service is running
-led.on()
+# Turn GP14 on permanently when service is running
+led14.on()
 
+print("Service running")
+
+# --- Main loop with GP16 breathing ---
 while True:
-    print("Service running")
-    time.sleep(5)
+    # Fade in
+    for duty in range(0, 65535, 2000):
+        led16.duty_u16(duty)
+        time.sleep(0.02)
+    # Fade out
+    for duty in range(65535, 0, -2000):
+        led16.duty_u16(duty)
+        time.sleep(0.02)
