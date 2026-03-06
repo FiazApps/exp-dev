@@ -32,7 +32,7 @@ print("Service running")
 # -----------------------------
 # Periodic OTA update settings
 # -----------------------------
-UPDATE_INTERVAL = 60 * 10  # seconds (10 minutes)
+UPDATE_INTERVAL = 60 * 1  # seconds (10 minutes)
 last_update_check = time.time()  # track last update check
 
 # -----------------------------
