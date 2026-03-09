@@ -1,9 +1,11 @@
 import time
-from machine import Pin, PWM, I2C
+from machine import Pin, PWM, I2C, RTC
 from lcd1602 import LCD
 import network
 import urequests
-import ota  # Make sure this is imported
+import ujson
+import socket
+import ota
 
 # -----------------------------
 # WiFi Configuration
@@ -23,9 +25,56 @@ lcd = LCD(i2c, addr=0x27, bl=1)
 led14 = Pin(14, Pin.OUT)
 led16 = PWM(Pin(16))
 led16.freq(1000)
-led17 = Pin(17, Pin.OUT)  # OTA update indicator LED
+led17 = Pin(17, Pin.OUT)  # OTA update indicator
 motion_led = Pin(19, Pin.OUT)
 pir = Pin(18, Pin.IN)
+
+# -----------------------------
+# RTC setup
+# -----------------------------
+rtc = RTC()
+
+# -----------------------------
+# NTP Time Synchronization
+# -----------------------------
+def sync_time():
+    """Get current time from NTP server"""
+    try:
+        # NTP server and port
+        NTP_SERVER = "pool.ntp.org"
+        NTP_PORT = 123
+        NTP_DELTA = 2208988800  # Seconds between 1900 and 1970
+        
+        # Create socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(2)
+        
+        # Send NTP request
+        ntp_query = bytearray(48)
+        ntp_query[0] = 0x1B
+        sock.sendto(ntp_query, (NTP_SERVER, NTP_PORT))
+        
+        # Receive response
+        msg, _ = sock.recvfrom(48)
+        sock.close()
+        
+        # Extract time
+        import struct
+        t = struct.unpack("!12I", msg)[10]
+        t -= NTP_DELTA
+        
+        # Convert to local time (UTC+0 for now - adjust for your timezone)
+        tm = time.gmtime(t)
+        
+        # Set RTC (year, month, day, weekday, hour, minute, second, subsecond)
+        # weekday: 0=Monday, 1=Tuesday, 2=Wednesday, 3=Thursday, 4=Friday, 5=Saturday, 6=Sunday
+        rtc.datetime((tm[0], tm[1], tm[2], tm[6], tm[3], tm[4], tm[5], 0))
+        
+        print(f"Time synchronized: {tm[3]:02d}:{tm[4]:02d}:{tm[5]:02d}")
+        return True
+    except Exception as e:
+        print("NTP sync failed:", e)
+        return False
 
 # -----------------------------
 # OTA update settings
@@ -37,19 +86,50 @@ last_update_check = time.time()
 # Day names and assignment
 # -----------------------------
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+DAY_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+# Reference date: March 9, 2026 (Monday) was Issa's Day
+# March 10, 2026 (Tuesday) is Idrees' Day
+REFERENCE_DATE = (2026, 3, 9)  # Year, Month, Day
+REFERENCE_DAY_NAME = "Idrees' Day"  # This date was Idrees' Day
 
 def get_day_assignment(year, month, day):
-    """Simple alternating day calculation"""
-    if day % 2 == 0:
-        return "Idrees' Day"
-    else:
+    """Calculate whose day it is based on days since reference date"""
+    # Simple day counter (approximate but works for our needs)
+    def days_since_ref(y, m, d):
+        # Months days (non-leap year approximation)
+        month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        
+        # Adjust for leap year (simplified)
+        if y % 4 == 0 and (y % 100 != 0 or y % 400 == 0):
+            month_days[1] = 29
+        
+        # Calculate days since reference
+        days = 0
+        # Add years
+        for yr in range(REFERENCE_DATE[0], y):
+            days += 366 if (yr % 4 == 0 and (yr % 100 != 0 or yr % 400 == 0)) else 365
+        # Add months
+        for mo in range(REFERENCE_DATE[1] - 1, m - 1):
+            days += month_days[mo]
+        # Add days
+        days += d - REFERENCE_DATE[2]
+        
+        return days
+    
+    days_diff = days_since_ref(year, month, day)
+    
+    # If days_diff is even, it's Issa's Day, if odd, it's Idrees' Day
+    if days_diff % 2 == 0:
         return "Issa's Day"
+    else:
+        return "Idrees' Day"
 
 # -----------------------------
 # Weather function using wttr.in
 # -----------------------------
 def get_weather():
-    """Get real weather from wttr.in (no API key needed)"""
+    """Get real weather from wttr.in"""
     try:
         url = "http://wttr.in/London?format=%t+%c+%w&m"
         response = urequests.get(url)
@@ -64,7 +144,7 @@ def get_weather():
         print("Weather error:", e)
         return "Weather N/A"
 
-# Cache weather to avoid too many requests
+# Cache weather
 weather_cache = ""
 weather_cache_time = 0
 WEATHER_UPDATE_INTERVAL = 1800  # 30 minutes
@@ -105,11 +185,6 @@ def connect_wifi():
     
     if wlan.isconnected():
         print("WiFi connected:", wlan.ifconfig())
-        lcd.clear()
-        lcd.puts("WiFi Connected!")
-        lcd.goto(0, 1)
-        lcd.puts(wlan.ifconfig()[0][:16])
-        time.sleep(2)
         return True
     else:
         print("WiFi failed")
@@ -134,7 +209,7 @@ def get_greeting(hour, minute):
         return "Goodnight"
 
 def format_time(hour, minute):
-    """Format time in 12-hour format"""
+    """Format time in 12-hour format with leading zeros"""
     period = "AM" if hour < 12 else "PM"
     hour_12 = hour if hour <= 12 else hour - 12
     if hour_12 == 0:
@@ -160,7 +235,7 @@ def get_screen2():
     year = now[0]
     month = now[1]
     day = now[2]
-    weekday = now[6]
+    weekday = now[6]  # 0=Monday, 6=Sunday
     
     day_name = DAY_NAMES[weekday]
     whose_day = get_day_assignment(year, month, day)
@@ -189,12 +264,33 @@ lcd.puts("Connecting WiFi")
 # Connect to WiFi
 wifi_ok = connect_wifi()
 
-if not wifi_ok:
+if wifi_ok:
+    lcd.clear()
+    lcd.puts("WiFi Connected!")
+    lcd.goto(0, 1)
+    lcd.puts("Syncing time...")
+    
+    # Sync time from NTP
+    time_synced = sync_time()
+    
+    if time_synced:
+        lcd.clear()
+        lcd.puts("Time Synced!")
+        now = time.localtime()
+        lcd.goto(0, 1)
+        lcd.puts(f"{now[3]:02d}:{now[4]:02d}:{now[5]:02d}")
+    else:
+        lcd.clear()
+        lcd.puts("Time sync failed")
+        lcd.goto(0, 1)
+        lcd.puts("Using default")
+else:
     lcd.clear()
     lcd.puts("WiFi Failed!")
     lcd.goto(0, 1)
     lcd.puts("Check credentials")
-    time.sleep(3)
+
+time.sleep(2)
 
 # Flash LED
 for i in range(3):
@@ -208,6 +304,13 @@ led14.on()
 print("Getting initial weather...")
 initial_weather = get_cached_weather()
 print("Weather:", initial_weather)
+
+# Show current date and assignment for verification
+now = time.localtime()
+print(f"Current date: {now[0]}-{now[1]:02d}-{now[2]:02d}")
+print(f"Day of week: {DAY_NAMES[now[6]]}")
+whose_day = get_day_assignment(now[0], now[1], now[2])
+print(f"Today is: {whose_day}")
 
 # -----------------------------
 # Screen control variables
@@ -234,11 +337,6 @@ last_time_update = 0
 TIME_UPDATE_INTERVAL = 1  # update time every second
 
 print(f"Ready - wave hand to activate (screen will stay on for {SCREEN_TIMEOUT} seconds)")
-
-# Store current screen content
-current_screen1 = get_screen1()
-current_screen2 = get_screen2()
-current_screen3 = get_screen3()
 
 # -----------------------------
 # Main loop
@@ -308,9 +406,7 @@ while True:
                 
                 print(f"Screen cycled to {SCREEN_NAMES[current_screen_index]}")
     
-    # -----------------------------
-    # OTA UPDATE CHECK (every 2 minutes)
-    # -----------------------------
+    # OTA update check (every 2 minutes)
     if current_time - last_update_check >= UPDATE_INTERVAL:
         led17.on()
         print("Checking for OTA updates...")
