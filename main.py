@@ -28,7 +28,6 @@ pir = Pin(18, Pin.IN)      # PIR motion sensor
 rtc = RTC()
 # Set time if needed (year, month, day, weekday, hour, minute, second, microsecond)
 # weekday: 0=Monday, 1=Tuesday, 2=Wednesday, 3=Thursday, 4=Friday, 5=Saturday, 6=Sunday
-# For example, if today is Monday:
 # rtc.datetime((2026, 3, 9, 0, 14, 30, 0, 0))  # 2026-03-09 Monday 14:30:00
 
 # Day names
@@ -36,17 +35,13 @@ DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 DAY_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 # Alternating day assignment (starting with Issa's Day for today)
-# This will be set based on a reference date
 REFERENCE_DATE = (2026, 3, 9)  # Year, Month, Day - today (Monday)
-REFERENCE_DAY_NAME = "Idrees' Day"  # Today is Issa's Day
+REFERENCE_DAY_NAME = "Issa's Day"  # Today is Issa's Day
 
 def get_day_assignment(current_year, current_month, current_day):
     """Calculate whose day it is based on days since reference date"""
-    # Convert dates to days since epoch (simplified calculation)
     def days_since_epoch(year, month, day):
-        # A simple day counter (not accounting for leap years perfectly, but close enough)
         month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-        # Adjust for leap year (simplified)
         if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0):
             month_days[1] = 29
         
@@ -62,18 +57,15 @@ def get_day_assignment(current_year, current_month, current_day):
     current_days = days_since_epoch(current_year, current_month, current_day)
     days_diff = current_days - ref_days
     
-    # If days_diff is even, it's Issa's Day, if odd, it's Idrees' Day
     if days_diff % 2 == 0:
         return "Issa's Day"
     else:
         return "Idrees' Day"
 
 # -----------------------------
-# Weather settings (free API)
+# Weather settings
 # -----------------------------
-# You'll need to sign up for a free API key at https://openweathermap.org/api
-# or use wttr.in which doesn't require an API key
-WEATHER_LOCATION = "Bolton"  # Change to your city
+WEATHER_LOCATION = "London"  # Change to your city
 weather_cache = ""
 weather_cache_time = 0
 WEATHER_UPDATE_INTERVAL = 1800  # Update weather every 30 minutes
@@ -87,20 +79,12 @@ def get_weather():
         return weather_cache
     
     try:
-        # Connect to WiFi (you'll need your credentials)
-        # This assumes you have WiFi credentials stored elsewhere
-        # For now, we'll return a placeholder
-        url = f"http://wttr.in/{WEATHER_LOCATION}?format=%t+%c+%w"
-        response = urequests.get(url)
-        if response.status_code == 200:
-            weather_cache = response.text.strip()
-        else:
-            weather_cache = "Weather N/A"
-        response.close()
+        # For now, return a placeholder - add WiFi connection code later
+        weather_cache = "22°C Sunny"
         weather_cache_time = current_time
         return weather_cache
     except:
-        return "Weather unavailable"
+        return "Weather N/A"
 
 # -----------------------------
 # Message screens
@@ -148,21 +132,21 @@ def get_date_message():
     weekday = now[6]  # 0=Monday, 6=Sunday
     
     day_name = DAY_NAMES[weekday]
-    day_full = DAY_FULL[weekday]
     
     # Get whose day it is
     whose_day = get_day_assignment(year, month, day)
     
-    return f"{day_name} {month:02d}/{day:02d} - {whose_day}"
+    return f"{day_name} {month:02d}/{day:02d} {whose_day}"
 
 def get_weather_message():
     """Get weather report"""
     weather = get_weather()
-    return f"Weather: {weather}"
+    return f"Weather:{weather}"
 
 # -----------------------------
 # Screen management
 # -----------------------------
+# Create list of message functions
 MESSAGE_SCREENS = [
     get_time_based_message,
     get_date_message,
@@ -193,9 +177,11 @@ print("Service running")
 
 # Initial screen
 lcd.clear()
-lcd.puts(get_time_based_message())
+initial_msg = get_time_based_message()
+lcd.puts(initial_msg[:16])  # First line
 lcd.goto(0, 1)
-lcd.puts(get_date_message()[:16])  # Truncate if needed
+next_msg = get_date_message()
+lcd.puts(next_msg[:16])  # Second line
 
 # -----------------------------
 # OTA update settings
@@ -217,26 +203,22 @@ screen_start_time = 0
 current_screen_index = 0
 last_screen_change = 0
 last_motion_time = 0
-motion_cooldown = 1  # seconds to ignore repeated motion triggers
+motion_cooldown = 0.5  # seconds to ignore repeated motion triggers
 
 # -----------------------------
 # Main loop
 # -----------------------------
 while True:
     current_time = time.time()
-    now = time.localtime()
-    hour = now[3]
-    minute = now[4]
-    second = now[5]
     
-    # Motion detection with cooldown
+    # Motion detection - this runs continuously
     motion_detected = pir.value() == 1
     
     if motion_detected and (current_time - last_motion_time > motion_cooldown):
         motion_led.on()
         last_motion_time = current_time
         
-        # Activate screen
+        # Activate screen if not already active
         if not screen_active:
             screen_active = True
             screen_start_time = current_time
@@ -246,11 +228,14 @@ while True:
             # Turn on backlight and show first screen
             lcd.backlight(True)
             lcd.clear()
-            lcd.puts(MESSAGE_SCREENS[0]()[:16])
+            
+            # Show first screen on line 1, second screen on line 2
+            line1 = MESSAGE_SCREENS[0]()
+            line2 = MESSAGE_SCREENS[1]()
+            lcd.puts(line1[:16])
             lcd.goto(0, 1)
-            next_screen = MESSAGE_SCREENS[1]()[:16]
-            lcd.puts(next_screen)
-            print("Motion detected - screen activated")
+            lcd.puts(line2[:16])
+            print("Screen activated")
         
         # Brief flash on motion LED
         time.sleep(0.1)
@@ -258,33 +243,44 @@ while True:
     else:
         motion_led.off()
     
-    # Screen management
+    # Screen management - this runs independently of motion
     if screen_active:
         # Check if screen should turn off
         if current_time - screen_start_time > SCREEN_ACTIVE_TIME:
             screen_active = False
             lcd.clear()
             lcd.backlight(False)
-            print("Screen deactivated")
+            print("Screen deactivated - timeout")
         
-        # Cycle through screens
-        if current_time - last_screen_change > SCREEN_DISPLAY_TIME:
+        # Cycle through screens (update every SCREEN_DISPLAY_TIME seconds)
+        elif current_time - last_screen_change > SCREEN_DISPLAY_TIME:
             current_screen_index = (current_screen_index + 1) % len(MESSAGE_SCREENS)
             last_screen_change = current_time
             
             # Update display with current and next screen
             lcd.clear()
-            lcd.puts(MESSAGE_SCREENS[current_screen_index]()[:16])
+            
+            # Show current screen on line 1
+            line1 = MESSAGE_SCREENS[current_screen_index]()
+            lcd.puts(line1[:16])
+            
+            # Show next screen on line 2
             lcd.goto(0, 1)
             next_index = (current_screen_index + 1) % len(MESSAGE_SCREENS)
-            lcd.puts(MESSAGE_SCREENS[next_index]()[:16])
+            line2 = MESSAGE_SCREENS[next_index]()
+            lcd.puts(line2[:16])
+            
+            print(f"Screen cycled to {current_screen_index}")
     
-    # Breathing LED (continues regardless of screen state)
+    # Breathing LED - runs continuously but doesn't block screen updates
+    # We'll break the breathing into smaller chunks to check motion and screen timing
+    
+    # Fade up
     for duty in range(0, 65535, fade_step):
         led16.duty_u16(duty)
         time.sleep(fade_delay)
         
-        # Quick motion check during breathing
+        # Quick motion check during breathing (non-blocking)
         if pir.value() == 1 and (time.time() - last_motion_time > motion_cooldown):
             motion_led.on()
             last_motion_time = time.time()
@@ -295,12 +291,22 @@ while True:
                 last_screen_change = time.time()
                 lcd.backlight(True)
                 lcd.clear()
-                lcd.puts(MESSAGE_SCREENS[0]()[:16])
+                line1 = MESSAGE_SCREENS[0]()
+                line2 = MESSAGE_SCREENS[1]()
+                lcd.puts(line1[:16])
                 lcd.goto(0, 1)
-                lcd.puts(MESSAGE_SCREENS[1]()[:16])
+                lcd.puts(line2[:16])
             time.sleep(0.1)
             motion_led.off()
+        
+        # Check screen timeout during breathing
+        if screen_active and time.time() - screen_start_time > SCREEN_ACTIVE_TIME:
+            screen_active = False
+            lcd.clear()
+            lcd.backlight(False)
+            print("Screen deactivated during breathing")
 
+    # Fade down
     for duty in range(65535, 0, -fade_step):
         led16.duty_u16(duty)
         time.sleep(fade_delay)
@@ -316,13 +322,22 @@ while True:
                 last_screen_change = time.time()
                 lcd.backlight(True)
                 lcd.clear()
-                lcd.puts(MESSAGE_SCREENS[0]()[:16])
+                line1 = MESSAGE_SCREENS[0]()
+                line2 = MESSAGE_SCREENS[1]()
+                lcd.puts(line1[:16])
                 lcd.goto(0, 1)
-                lcd.puts(MESSAGE_SCREENS[1]()[:16])
+                lcd.puts(line2[:16])
             time.sleep(0.1)
             motion_led.off()
+        
+        # Check screen timeout during breathing
+        if screen_active and time.time() - screen_start_time > SCREEN_ACTIVE_TIME:
+            screen_active = False
+            lcd.clear()
+            lcd.backlight(False)
+            print("Screen deactivated during breathing")
 
-    # OTA update check
+    # OTA update check (runs less frequently)
     if current_time - last_update_check >= UPDATE_INTERVAL:
         led17.on()
         print("Checking for updates")
@@ -340,4 +355,6 @@ while True:
         # Restore LCD display if active
         if screen_active:
             lcd.goto(0, 1)
-            lcd.puts(MESSAGE_SCREENS[(current_screen_index + 1) % len(MESSAGE_SCREENS)]()[:16])
+            next_index = (current_screen_index + 1) % len(MESSAGE_SCREENS)
+            line2 = MESSAGE_SCREENS[next_index]()
+            lcd.puts(line2[:16])
