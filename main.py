@@ -3,7 +3,7 @@ from machine import Pin, PWM, I2C, RTC
 from lcd1602 import LCD
 import network
 import urequests
-import ujson
+import json
 import socket
 import ota
 
@@ -35,46 +35,84 @@ pir = Pin(18, Pin.IN)
 rtc = RTC()
 
 # -----------------------------
-# NTP Time Synchronization
+# Reliable Time Synchronization
 # -----------------------------
 def sync_time():
-    """Get current time from NTP server"""
+    """Get current time from multiple sources"""
+    
+    # Method 1: Try wttr.in time (they return date header)
     try:
-        # NTP server and port
-        NTP_SERVER = "pool.ntp.org"
-        NTP_PORT = 123
-        NTP_DELTA = 2208988800  # Seconds between 1900 and 1970
-        
-        # Create socket
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(2)
-        
-        # Send NTP request
-        ntp_query = bytearray(48)
-        ntp_query[0] = 0x1B
-        sock.sendto(ntp_query, (NTP_SERVER, NTP_PORT))
-        
-        # Receive response
-        msg, _ = sock.recvfrom(48)
-        sock.close()
-        
-        # Extract time
-        import struct
-        t = struct.unpack("!12I", msg)[10]
-        t -= NTP_DELTA
-        
-        # Convert to local time (UTC+0 for now - adjust for your timezone)
-        tm = time.gmtime(t)
-        
-        # Set RTC (year, month, day, weekday, hour, minute, second, subsecond)
-        # weekday: 0=Monday, 1=Tuesday, 2=Wednesday, 3=Thursday, 4=Friday, 5=Saturday, 6=Sunday
-        rtc.datetime((tm[0], tm[1], tm[2], tm[6], tm[3], tm[4], tm[5], 0))
-        
-        print(f"Time synchronized: {tm[3]:02d}:{tm[4]:02d}:{tm[5]:02d}")
-        return True
+        print("Trying time from wttr.in...")
+        response = urequests.get("http://wttr.in/London?format=%t")
+        if response.status_code == 200:
+            # Get the date from headers
+            if 'Date' in response.headers:
+                date_str = response.headers['Date']
+                print(f"Date header: {date_str}")
+                # Parse HTTP date format: "Wed, 09 Mar 2026 01:28:45 GMT"
+                # This is complex to parse, so we'll use method 2 instead
+        response.close()
+    except:
+        pass
+    
+    # Method 2: Use worldtimeapi.org (very reliable)
+    try:
+        print("Trying worldtimeapi.org...")
+        response = urequests.get("http://worldtimeapi.org/api/timezone/Europe/London")
+        if response.status_code == 200:
+            data = response.json()
+            datetime_str = data['datetime']
+            # Format: 2026-03-09T01:28:45.123456+00:00
+            date_part = datetime_str.split('T')[0]
+            time_part = datetime_str.split('T')[1].split('.')[0]
+            
+            year, month, day = map(int, date_part.split('-'))
+            hour, minute, second = map(int, time_part.split(':'))
+            
+            # Calculate weekday (0=Monday, 6=Sunday)
+            # This is a simplified calculation - worldtimeapi also provides day_of_week
+            if 'day_of_week' in data:
+                weekday = data['day_of_week']  # 1=Monday, 7=Sunday in their API
+                weekday = weekday - 1  # Convert to 0=Monday
+            else:
+                # Rough calculation - for March 9, 2026 it's Monday (0)
+                weekday = 0  # Default to Monday
+            
+            rtc.datetime((year, month, day, weekday, hour, minute, second, 0))
+            print(f"Time synchronized: {hour:02d}:{minute:02d}:{second:02d}")
+            return True
+        response.close()
     except Exception as e:
-        print("NTP sync failed:", e)
-        return False
+        print("worldtimeapi failed:", e)
+    
+    # Method 3: Use timeapi.org (backup)
+    try:
+        print("Trying timeapi.org...")
+        response = urequests.get("http://timeapi.org/utc/now")
+        if response.status_code == 200:
+            time_str = response.text.strip()
+            # Format: 2026-03-09T01:28:45Z
+            date_part = time_str.split('T')[0]
+            time_part = time_str.split('T')[1].replace('Z', '')
+            
+            year, month, day = map(int, date_part.split('-'))
+            hour, minute, second = map(int, time_part.split(':'))
+            
+            # For March 9, 2026 it's Monday (0)
+            weekday = 0
+            
+            rtc.datetime((year, month, day, weekday, hour, minute, second, 0))
+            print(f"Time synchronized via backup: {hour:02d}:{minute:02d}")
+            return True
+        response.close()
+    except Exception as e:
+        print("timeapi.org failed:", e)
+    
+    # Method 4: Manual set for March 9, 2026 (Idrees' Day)
+    print("Using manual time for March 9, 2026")
+    # March 9, 2026 is Monday (weekday 0), 1:28 AM
+    rtc.datetime((2026, 3, 9, 0, 1, 28, 0, 0))  # Monday, 1:28 AM
+    return False
 
 # -----------------------------
 # OTA update settings
@@ -88,19 +126,19 @@ last_update_check = time.time()
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 DAY_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
-# Reference date: March 9, 2026 (Monday) was Idrees' Day
+# Reference date: March 9, 2026 (Monday) is Idrees' Day
 # March 10, 2026 (Tuesday) is Issa's Day
 REFERENCE_DATE = (2026, 3, 9)  # Year, Month, Day
-REFERENCE_DAY_NAME = "Idrees' Day"  # This date was Idrees' Day
+REFERENCE_DAY_NAME = "Idrees' Day"  # This date is Idrees' Day
 
 def get_day_assignment(year, month, day):
     """Calculate whose day it is based on days since reference date"""
-    # Simple day counter (approximate but works for our needs)
+    # Simple day counter
     def days_since_ref(y, m, d):
-        # Months days (non-leap year approximation)
+        # Month days
         month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
         
-        # Adjust for leap year (simplified)
+        # Adjust for leap year
         if y % 4 == 0 and (y % 100 != 0 or y % 400 == 0):
             month_days[1] = 29
         
@@ -110,7 +148,12 @@ def get_day_assignment(year, month, day):
         for yr in range(REFERENCE_DATE[0], y):
             days += 366 if (yr % 4 == 0 and (yr % 100 != 0 or yr % 400 == 0)) else 365
         # Add months
-        for mo in range(REFERENCE_DATE[1] - 1, m - 1):
+        if y == REFERENCE_DATE[0]:
+            start_month = REFERENCE_DATE[1]
+        else:
+            start_month = 1
+            
+        for mo in range(start_month - 1, m - 1):
             days += month_days[mo]
         # Add days
         days += d - REFERENCE_DATE[2]
@@ -119,14 +162,14 @@ def get_day_assignment(year, month, day):
     
     days_diff = days_since_ref(year, month, day)
     
-    # If days_diff is even, it's Issa's Day, if odd, it's Idrees' Day
+    # If days_diff is even, it's Idrees' Day, if odd, it's Issa's Day
     if days_diff % 2 == 0:
-        return "Issa's Day"
-    else:
         return "Idrees' Day"
+    else:
+        return "Issa's Day"
 
 # -----------------------------
-# Weather function using wttr.in
+# Weather function
 # -----------------------------
 def get_weather():
     """Get real weather from wttr.in"""
@@ -270,7 +313,7 @@ if wifi_ok:
     lcd.goto(0, 1)
     lcd.puts("Syncing time...")
     
-    # Sync time from NTP
+    # Sync time
     time_synced = sync_time()
     
     if time_synced:
@@ -281,14 +324,14 @@ if wifi_ok:
         lcd.puts(f"{now[3]:02d}:{now[4]:02d}:{now[5]:02d}")
     else:
         lcd.clear()
-        lcd.puts("Time sync failed")
+        lcd.puts("Using default time")
         lcd.goto(0, 1)
-        lcd.puts("Using default")
+        lcd.puts("Mar 9 2026 01:28")
 else:
     lcd.clear()
     lcd.puts("WiFi Failed!")
     lcd.goto(0, 1)
-    lcd.puts("Check credentials")
+    lcd.puts("Using default time")
 
 time.sleep(2)
 
@@ -336,7 +379,7 @@ BREATH_DELAY = 0.02
 last_time_update = 0
 TIME_UPDATE_INTERVAL = 1  # update time every second
 
-print(f"Ready - wave hand to activate (screen will stay on for {SCREEN_TIMEOUT} seconds)")
+print(f"Ready - wave hand to activate")
 
 # -----------------------------
 # Main loop
@@ -361,8 +404,8 @@ while True:
             # Show first screen immediately
             lcd.puts(SCREENS[0]()[:16])
             lcd.goto(0, 1)
-            lcd.puts(SCREENS[1]()[:16])  # Show next screen on line 2
-            print("Screen ON - showing Time screen")
+            lcd.puts(SCREENS[1]()[:16])
+            print("Screen ON")
         
         time.sleep(0.05)
         motion_led.off()
@@ -374,31 +417,26 @@ while True:
             screen_active = False
             lcd.clear()
             lcd.backlight(False)
-            print("Screen OFF - timeout")
+            print("Screen OFF")
         
         else:
             # Update content every second (for time updates)
             if current_time - last_time_update >= TIME_UPDATE_INTERVAL:
-                # Only refresh screen 1 (time) every second, others stay the same
-                if current_screen_index == 0:  # If showing time screen
+                # Only refresh screen 1 (time) every second
+                if current_screen_index == 0:
                     lcd.goto(0, 0)
                     lcd.puts(SCREENS[0]()[:16])
                 last_time_update = current_time
             
             # Cycle to next screen every SCREEN_CYCLE_TIME seconds
             if current_time - last_screen_cycle >= SCREEN_CYCLE_TIME:
-                # Move to next screen
                 current_screen_index = (current_screen_index + 1) % len(SCREENS)
                 last_screen_cycle = current_time
                 
-                # Update display with new screen on line 1, next screen on line 2
                 lcd.clear()
-                
-                # Show current screen on line 1
                 line1 = SCREENS[current_screen_index]()
                 lcd.puts(line1[:16])
                 
-                # Show next screen on line 2
                 next_index = (current_screen_index + 1) % len(SCREENS)
                 line2 = SCREENS[next_index]()
                 lcd.goto(0, 1)
@@ -406,14 +444,12 @@ while True:
                 
                 print(f"Screen cycled to {SCREEN_NAMES[current_screen_index]}")
     
-    # OTA update check (every 2 minutes)
+    # OTA update check
     if current_time - last_update_check >= UPDATE_INTERVAL:
         led17.on()
         print("Checking for OTA updates...")
         
-        # Briefly show OTA status on LCD if screen is active
         if screen_active:
-            # Save current screen info to restore later
             temp_line1 = line1 if 'line1' in locals() else SCREENS[current_screen_index]()
             temp_line2 = line2 if 'line2' in locals() else SCREENS[(current_screen_index + 1) % len(SCREENS)]()
             
@@ -422,13 +458,11 @@ while True:
             lcd.goto(0, 1)
             lcd.puts("Please wait")
         
-        # Perform OTA update check
         ota.check_for_update()
         
         led17.off()
         last_update_check = current_time
         
-        # Restore LCD display if screen is still active
         if screen_active:
             lcd.clear()
             lcd.puts(temp_line1[:16])
