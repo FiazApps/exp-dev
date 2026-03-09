@@ -3,6 +3,7 @@ from machine import Pin, PWM, I2C
 from lcd1602 import LCD
 import network
 import urequests
+import ota  # Make sure this is imported
 
 # -----------------------------
 # WiFi Configuration
@@ -22,8 +23,15 @@ lcd = LCD(i2c, addr=0x27, bl=1)
 led14 = Pin(14, Pin.OUT)
 led16 = PWM(Pin(16))
 led16.freq(1000)
+led17 = Pin(17, Pin.OUT)  # OTA update indicator LED
 motion_led = Pin(19, Pin.OUT)
 pir = Pin(18, Pin.IN)
+
+# -----------------------------
+# OTA update settings
+# -----------------------------
+UPDATE_INTERVAL = 120  # Check for updates every 2 minutes
+last_update_check = time.time()
 
 # -----------------------------
 # Day names and assignment
@@ -206,7 +214,7 @@ print("Weather:", initial_weather)
 # -----------------------------
 screen_active = False
 screen_timeout_start = 0
-SCREEN_TIMEOUT = 45  # 45 seconds of screen-on time (updated!)
+SCREEN_TIMEOUT = 45  # 45 seconds of screen-on time
 motion_cooldown = 1
 last_motion_time = 0
 
@@ -299,6 +307,39 @@ while True:
                 lcd.puts(line2[:16])
                 
                 print(f"Screen cycled to {SCREEN_NAMES[current_screen_index]}")
+    
+    # -----------------------------
+    # OTA UPDATE CHECK (every 2 minutes)
+    # -----------------------------
+    if current_time - last_update_check >= UPDATE_INTERVAL:
+        led17.on()
+        print("Checking for OTA updates...")
+        
+        # Briefly show OTA status on LCD if screen is active
+        if screen_active:
+            # Save current screen info to restore later
+            temp_line1 = line1 if 'line1' in locals() else SCREENS[current_screen_index]()
+            temp_line2 = line2 if 'line2' in locals() else SCREENS[(current_screen_index + 1) % len(SCREENS)]()
+            
+            lcd.goto(0, 0)
+            lcd.puts("OTA checking...")
+            lcd.goto(0, 1)
+            lcd.puts("Please wait")
+        
+        # Perform OTA update check
+        ota.check_for_update()
+        
+        led17.off()
+        last_update_check = current_time
+        
+        # Restore LCD display if screen is still active
+        if screen_active:
+            lcd.clear()
+            lcd.puts(temp_line1[:16])
+            lcd.goto(0, 1)
+            lcd.puts(temp_line2[:16])
+        
+        print("OTA check complete")
     
     # Breathing LED
     breath_value += breath_direction * BREATH_STEP
