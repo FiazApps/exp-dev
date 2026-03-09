@@ -1,11 +1,17 @@
 import time
-from machine import Pin, PWM, I2C, RTC
-import ota
+from machine import Pin, PWM, I2C
 from lcd1602 import LCD
+import network
 import urequests
 
 # -----------------------------
-# LCD setup (I2C)
+# WiFi Configuration
+# -----------------------------
+SSID = "YourWiFiSSID"
+PASSWORD = "YourWiFiPassword"
+
+# -----------------------------
+# LCD setup
 # -----------------------------
 i2c = I2C(0, sda=Pin(20), scl=Pin(21), freq=100000)
 lcd = LCD(i2c, addr=0x27, bl=1)
@@ -13,48 +19,114 @@ lcd = LCD(i2c, addr=0x27, bl=1)
 # -----------------------------
 # LED setup
 # -----------------------------
-led14 = Pin(14, Pin.OUT)  # startup/service LED
-led16 = PWM(Pin(16))       # breathing LED
+led14 = Pin(14, Pin.OUT)
+led16 = PWM(Pin(16))
 led16.freq(1000)
-led17 = Pin(17, Pin.OUT)   # OTA update indicator
-motion_led = Pin(19, Pin.OUT)  # motion detected LED
-pir = Pin(18, Pin.IN)      # PIR motion sensor
+motion_led = Pin(19, Pin.OUT)
+pir = Pin(18, Pin.IN)
 
 # -----------------------------
 # Day names and assignment
 # -----------------------------
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-REFERENCE_DATE = (2026, 3, 9)  # Today (Monday)
 
 def get_day_assignment(year, month, day):
     """Simple alternating day calculation"""
-    # Count days since reference (simplified)
-    total_days = (year - REFERENCE_DATE[0]) * 365 + (month - REFERENCE_DATE[1]) * 30 + (day - REFERENCE_DATE[2])
-    if total_days % 2 == 0:
-        return "Issa's Day"
-    else:
+    if day % 2 == 0:
         return "Idrees' Day"
+    else:
+        return "Issa's Day"
+
+# -----------------------------
+# Weather function using wttr.in
+# -----------------------------
+def get_weather():
+    """Get real weather from wttr.in (no API key needed)"""
+    try:
+        # Format: temperature, weather code, wind speed
+        # Using ?m for metric units (Celsius, km/h)
+        url = "http://wttr.in/London?format=%t+%c+%w&m"
+        response = urequests.get(url)
+        if response.status_code == 200:
+            weather = response.text.strip()
+            response.close()
+            return weather
+        else:
+            response.close()
+            return "Weather N/A"
+    except Exception as e:
+        print("Weather error:", e)
+        return "Weather N/A"
+
+# Cache weather to avoid too many requests
+weather_cache = ""
+weather_cache_time = 0
+WEATHER_UPDATE_INTERVAL = 1800  # 30 minutes
+
+def get_cached_weather():
+    """Get weather, updating cache every 30 minutes"""
+    global weather_cache, weather_cache_time
+    current_time = time.time()
+    
+    if current_time - weather_cache_time > WEATHER_UPDATE_INTERVAL or not weather_cache:
+        weather_cache = get_weather()
+        weather_cache_time = current_time
+    
+    return weather_cache
+
+# -----------------------------
+# WiFi connection
+# -----------------------------
+def connect_wifi():
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+    
+    if not wlan.isconnected():
+        print("Connecting to WiFi...")
+        lcd.clear()
+        lcd.puts("Connecting WiFi")
+        lcd.goto(0, 1)
+        lcd.puts(SSID[:16])
+        
+        wlan.connect(SSID, PASSWORD)
+        
+        # Wait for connection with timeout
+        timeout = 10
+        while not wlan.isconnected() and timeout > 0:
+            time.sleep(1)
+            timeout -= 1
+            print(f"Waiting... {timeout}")
+    
+    if wlan.isconnected():
+        print("WiFi connected:", wlan.ifconfig())
+        lcd.clear()
+        lcd.puts("WiFi Connected!")
+        lcd.goto(0, 1)
+        lcd.puts(wlan.ifconfig()[0][:16])
+        time.sleep(2)
+        return True
+    else:
+        print("WiFi failed")
+        return False
 
 # -----------------------------
 # Message generation
 # -----------------------------
 def get_greeting(hour, minute):
-    """Get greeting based on time"""
     total_minutes = hour * 60 + minute
     
-    if total_minutes < 1 * 60 + 1:  # 00:01
+    if total_minutes < 1 * 60 + 1:
         return "Good morning"
-    elif total_minutes < 12 * 60:   # Before 12 PM
+    elif total_minutes < 12 * 60:
         return "Good morning"
-    elif total_minutes < 17 * 60:   # 12 PM - 5 PM
+    elif total_minutes < 17 * 60:
         return "Good afternoon"
-    elif total_minutes < 19 * 60 + 45:  # 5 PM - 7:45 PM
+    elif total_minutes < 19 * 60 + 45:
         return "Good evening"
-    else:                            # 7:45 PM - midnight
+    else:
         return "Goodnight"
 
 def format_time(hour, minute):
-    """Format time in 12-hour format"""
     period = "AM" if hour < 12 else "PM"
     hour_12 = hour if hour <= 12 else hour - 12
     if hour_12 == 0:
@@ -62,41 +134,19 @@ def format_time(hour, minute):
     return f"{hour_12:02d}:{minute:02d}{period}"
 
 def get_top_line():
-    """Get the scrolling top line (time + greeting + weather)"""
+    """Top line with greeting, time, and real weather"""
     now = time.localtime()
     hour = now[3]
     minute = now[4]
     
     greeting = get_greeting(hour, minute)
     time_str = format_time(hour, minute)
+    weather = get_cached_weather()
     
-
-# Then modify get_top_line():
-def get_top_line():
-    now = time.localtime()
-    hour = now[3]
-    minute = now[4]
-    
-    greeting = get_greeting(hour, minute)
-    time_str = format_time(hour, minute)
-    
-    # Get real weather (cache to avoid too many requests)
-    global last_weather, last_weather_time
-    if time.time() - last_weather_time > 1800:  # Update every 30 min
-        try:
-            response = urequests.get("http://wttr.in/London?format=%t+%c")
-            last_weather = response.text.strip()
-            response.close()
-            last_weather_time = time.time()
-        except:
-            pass  # Keep old weather on failure
-    
-    return f"{greeting} {time_str} | {last_weather} | "
-    
-    return f"{greeting} {time_str} | {weather} | "
+    return f"{greeting} {time_str} {weather} "
 
 def get_bottom_line():
-    """Get the static bottom line (day + date + assignment)"""
+    """Bottom line with day, date, and assignment"""
     now = time.localtime()
     year = now[0]
     month = now[1]
@@ -109,126 +159,130 @@ def get_bottom_line():
     return f"{day_name} {month:02d}/{day:02d} {whose_day}"
 
 # -----------------------------
-# Scrolling function
+# Startup
 # -----------------------------
-def scroll_text(lcd, text, line, start_pos=0):
-    """Display a scrolling line of text"""
-    # Pad with spaces to make scrolling smooth
-    display_text = text + "   "  # Add padding
-    if len(display_text) > 16:
-        # Show a 16-character window
-        if start_pos >= len(display_text) - 16:
-            start_pos = 0
-        visible = display_text[start_pos:start_pos+16]
-    else:
-        visible = display_text[:16]
-    
-    lcd.goto(0, line)
-    lcd.puts(visible)
-    return start_pos + 1  # Move scroll position
-
-# -----------------------------
-# Startup sequence
-# -----------------------------
-print("Runtime started")
+print("Starting up...")
 lcd.clear()
-lcd.puts("System starting...")
+lcd.puts("Starting...")
 lcd.goto(0, 1)
-lcd.puts("Pico W ready")
+lcd.puts("Connecting WiFi")
 
-# Flash LED 5 times
-for i in range(5):
+# Connect to WiFi
+wifi_ok = connect_wifi()
+
+if not wifi_ok:
+    lcd.clear()
+    lcd.puts("WiFi Failed!")
+    lcd.goto(0, 1)
+    lcd.puts("Check credentials")
+    time.sleep(3)
+
+# Flash LED
+for i in range(3):
     led14.on()
-    time.sleep(0.3)
+    time.sleep(0.2)
     led14.off()
-    time.sleep(0.3)
+    time.sleep(0.2)
 led14.on()
+
+# Get initial weather
+print("Getting initial weather...")
+initial_weather = get_cached_weather()
+print("Weather:", initial_weather)
 
 # -----------------------------
 # Screen control variables
 # -----------------------------
 screen_active = False
-screen_off_time = 0
-SCREEN_TIMEOUT = 15  # seconds
-motion_cooldown = 0.5
+screen_timeout_start = 0
+SCREEN_TIMEOUT = 10
+motion_cooldown = 1
 last_motion_time = 0
-scroll_position = 0
+
+# Breathing LED
+breath_direction = 1
+breath_value = 0
+BREATH_STEP = 500
+BREATH_DELAY = 0.02
+
+# Scrolling
+scroll_pos = 0
 last_scroll_time = 0
-SCROLL_SPEED = 0.3  # seconds per scroll step
+SCROLL_SPEED = 0.3
 
-# Get initial bottom line (doesn't change often)
+# Timing
+last_time_update = 0
+TIME_UPDATE_INTERVAL = 1
+
+print("Ready - wave hand to activate")
+
+# Store current content
+current_top = get_top_line()
 current_bottom = get_bottom_line()
-
-print("Ready - waiting for motion")
 
 # -----------------------------
 # Main loop
 # -----------------------------
 while True:
     current_time = time.time()
+    current_ms = time.ticks_ms()
     
-    # Check motion
-    motion_detected = pir.value() == 1
-    
-    if motion_detected and (current_time - last_motion_time > motion_cooldown):
+    # Motion detection
+    if pir.value() == 1 and (current_time - last_motion_time > motion_cooldown):
         motion_led.on()
         last_motion_time = current_time
         
         if not screen_active:
             screen_active = True
-            screen_off_time = current_time + SCREEN_TIMEOUT
+            screen_timeout_start = current_time
             lcd.backlight(True)
             lcd.clear()
-            print("Screen activated")
+            scroll_pos = 0
+            print("Screen ON")
         
-        time.sleep(0.1)
+        time.sleep(0.05)
         motion_led.off()
     
     # Screen management
     if screen_active:
-        # Check if screen should turn off
-        if current_time >= screen_off_time:
+        if current_time - screen_timeout_start > SCREEN_TIMEOUT:
             screen_active = False
             lcd.clear()
             lcd.backlight(False)
-            print("Screen deactivated")
+            print("Screen OFF")
+        
         else:
-            # Update scrolling text
-            if current_time - last_scroll_time > SCROLL_SPEED:
-                # Get fresh top line (updates time and greeting each scroll)
+            # Update content every second
+            if current_time - last_time_update >= TIME_UPDATE_INTERVAL:
                 current_top = get_top_line()
-                # Update bottom line (in case day changed at midnight)
                 current_bottom = get_bottom_line()
+                last_time_update = current_time
+            
+            # Scroll top line
+            if time.ticks_diff(current_ms, last_scroll_time) > SCROLL_SPEED * 1000:
+                display_top = current_top + "   "
+                if scroll_pos >= len(display_top) - 16:
+                    scroll_pos = 0
                 
-                # Scroll top line
-                scroll_position = scroll_text(lcd, current_top, 0, scroll_position)
+                visible_top = display_top[scroll_pos:scroll_pos+16]
                 
-                # Show static bottom line
+                lcd.goto(0, 0)
+                lcd.puts(visible_top)
                 lcd.goto(0, 1)
                 lcd.puts(current_bottom[:16])
                 
-                last_scroll_time = current_time
+                scroll_pos += 1
+                last_scroll_time = current_ms
     
-    # Breathing LED (non-blocking with time checks)
-    for duty in range(0, 65535, 2000):
-        led16.duty_u16(duty)
-        time.sleep(0.02)
-        
-        # Quick motion check during breathing
-        if pir.value() == 1 and (time.time() - last_motion_time > motion_cooldown):
-            break
+    # Breathing LED
+    breath_value += breath_direction * BREATH_STEP
     
-    for duty in range(65535, 0, -2000):
-        led16.duty_u16(duty)
-        time.sleep(0.02)
-        
-        # Quick motion check during breathing
-        if pir.value() == 1 and (time.time() - last_motion_time > motion_cooldown):
-            break
+    if breath_value >= 65535:
+        breath_value = 65535
+        breath_direction = -1
+    elif breath_value <= 0:
+        breath_value = 0
+        breath_direction = 1
     
-    # OTA update (every 2 minutes)
-    if current_time % 120 < 1:  # Simple timer
-        led17.on()
-        print("OTA check")
-        # ota.check_for_update()  # Uncomment when ready
-        led17.off()
+    led16.duty_u16(breath_value)
+    time.sleep(BREATH_DELAY)
