@@ -43,8 +43,6 @@ def get_day_assignment(year, month, day):
 def get_weather():
     """Get real weather from wttr.in (no API key needed)"""
     try:
-        # Format: temperature, weather code, wind speed
-        # Using ?m for metric units (Celsius, km/h)
         url = "http://wttr.in/London?format=%t+%c+%w&m"
         response = urequests.get(url)
         if response.status_code == 200:
@@ -113,40 +111,43 @@ def connect_wifi():
 # Message generation
 # -----------------------------
 def get_greeting(hour, minute):
+    """Get greeting based on time"""
     total_minutes = hour * 60 + minute
     
-    if total_minutes < 1 * 60 + 1:
+    if total_minutes < 1 * 60 + 1:  # 00:01
         return "Good morning"
-    elif total_minutes < 12 * 60:
+    elif total_minutes < 12 * 60:   # Before 12 PM
         return "Good morning"
-    elif total_minutes < 17 * 60:
+    elif total_minutes < 17 * 60:   # 12 PM - 5 PM
         return "Good afternoon"
-    elif total_minutes < 19 * 60 + 45:
+    elif total_minutes < 19 * 60 + 45:  # 5 PM - 7:45 PM
         return "Good evening"
-    else:
+    else:                            # 7:45 PM - midnight
         return "Goodnight"
 
 def format_time(hour, minute):
+    """Format time in 12-hour format"""
     period = "AM" if hour < 12 else "PM"
     hour_12 = hour if hour <= 12 else hour - 12
     if hour_12 == 0:
         hour_12 = 12
     return f"{hour_12:02d}:{minute:02d}{period}"
 
-def get_top_line():
-    """Top line with greeting, time, and real weather"""
+# Screen 1: Greeting and Time
+def get_screen1():
+    """Screen 1: Good morning/afternoon/evening/night with time"""
     now = time.localtime()
     hour = now[3]
     minute = now[4]
     
     greeting = get_greeting(hour, minute)
     time_str = format_time(hour, minute)
-    weather = get_cached_weather()
     
-    return f"{greeting} {time_str} {weather} "
+    return f"{greeting} {time_str}"
 
-def get_bottom_line():
-    """Bottom line with day, date, and assignment"""
+# Screen 2: Day and Assignment
+def get_screen2():
+    """Screen 2: Day of week, date, and Issa/Idrees day"""
     now = time.localtime()
     year = now[0]
     month = now[1]
@@ -157,6 +158,16 @@ def get_bottom_line():
     whose_day = get_day_assignment(year, month, day)
     
     return f"{day_name} {month:02d}/{day:02d} {whose_day}"
+
+# Screen 3: Weather
+def get_screen3():
+    """Screen 3: Current weather"""
+    weather = get_cached_weather()
+    return f"Weather:{weather}"
+
+# List of screen functions
+SCREENS = [get_screen1, get_screen2, get_screen3]
+SCREEN_NAMES = ["Time", "Date", "Weather"]
 
 # -----------------------------
 # Startup
@@ -195,9 +206,14 @@ print("Weather:", initial_weather)
 # -----------------------------
 screen_active = False
 screen_timeout_start = 0
-SCREEN_TIMEOUT = 10
+SCREEN_TIMEOUT = 45  # 45 seconds of screen-on time (updated!)
 motion_cooldown = 1
 last_motion_time = 0
+
+# Screen cycling variables
+current_screen_index = 0
+last_screen_cycle = 0
+SCREEN_CYCLE_TIME = 4  # seconds per screen
 
 # Breathing LED
 breath_direction = 1
@@ -205,20 +221,16 @@ breath_value = 0
 BREATH_STEP = 500
 BREATH_DELAY = 0.02
 
-# Scrolling
-scroll_pos = 0
-last_scroll_time = 0
-SCROLL_SPEED = 0.3
-
 # Timing
 last_time_update = 0
-TIME_UPDATE_INTERVAL = 1
+TIME_UPDATE_INTERVAL = 1  # update time every second
 
-print("Ready - wave hand to activate")
+print(f"Ready - wave hand to activate (screen will stay on for {SCREEN_TIMEOUT} seconds)")
 
-# Store current content
-current_top = get_top_line()
-current_bottom = get_bottom_line()
+# Store current screen content
+current_screen1 = get_screen1()
+current_screen2 = get_screen2()
+current_screen3 = get_screen3()
 
 # -----------------------------
 # Main loop
@@ -235,44 +247,58 @@ while True:
         if not screen_active:
             screen_active = True
             screen_timeout_start = current_time
+            current_screen_index = 0
+            last_screen_cycle = current_time
             lcd.backlight(True)
             lcd.clear()
-            scroll_pos = 0
-            print("Screen ON")
+            
+            # Show first screen immediately
+            lcd.puts(SCREENS[0]()[:16])
+            lcd.goto(0, 1)
+            lcd.puts(SCREENS[1]()[:16])  # Show next screen on line 2
+            print("Screen ON - showing Time screen")
         
         time.sleep(0.05)
         motion_led.off()
     
     # Screen management
     if screen_active:
+        # Check if screen should turn off after 45 seconds
         if current_time - screen_timeout_start > SCREEN_TIMEOUT:
             screen_active = False
             lcd.clear()
             lcd.backlight(False)
-            print("Screen OFF")
+            print("Screen OFF - timeout")
         
         else:
-            # Update content every second
+            # Update content every second (for time updates)
             if current_time - last_time_update >= TIME_UPDATE_INTERVAL:
-                current_top = get_top_line()
-                current_bottom = get_bottom_line()
+                # Only refresh screen 1 (time) every second, others stay the same
+                if current_screen_index == 0:  # If showing time screen
+                    lcd.goto(0, 0)
+                    lcd.puts(SCREENS[0]()[:16])
                 last_time_update = current_time
             
-            # Scroll top line
-            if time.ticks_diff(current_ms, last_scroll_time) > SCROLL_SPEED * 1000:
-                display_top = current_top + "   "
-                if scroll_pos >= len(display_top) - 16:
-                    scroll_pos = 0
+            # Cycle to next screen every SCREEN_CYCLE_TIME seconds
+            if current_time - last_screen_cycle >= SCREEN_CYCLE_TIME:
+                # Move to next screen
+                current_screen_index = (current_screen_index + 1) % len(SCREENS)
+                last_screen_cycle = current_time
                 
-                visible_top = display_top[scroll_pos:scroll_pos+16]
+                # Update display with new screen on line 1, next screen on line 2
+                lcd.clear()
                 
-                lcd.goto(0, 0)
-                lcd.puts(visible_top)
+                # Show current screen on line 1
+                line1 = SCREENS[current_screen_index]()
+                lcd.puts(line1[:16])
+                
+                # Show next screen on line 2
+                next_index = (current_screen_index + 1) % len(SCREENS)
+                line2 = SCREENS[next_index]()
                 lcd.goto(0, 1)
-                lcd.puts(current_bottom[:16])
+                lcd.puts(line2[:16])
                 
-                scroll_pos += 1
-                last_scroll_time = current_ms
+                print(f"Screen cycled to {SCREEN_NAMES[current_screen_index]}")
     
     # Breathing LED
     breath_value += breath_direction * BREATH_STEP
