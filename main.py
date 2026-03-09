@@ -88,8 +88,8 @@ last_update_check = time.time()
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 DAY_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
-# Reference date: March 9, 2026 (Monday) was Issa's Day
-# March 10, 2026 (Tuesday) is Idrees' Day
+# Reference date: March 9, 2026 (Monday) was Idrees' Day
+# March 10, 2026 (Tuesday) is Issa's Day
 REFERENCE_DATE = (2026, 3, 9)  # Year, Month, Day
 REFERENCE_DAY_NAME = "Idrees' Day"  # This date was Idrees' Day
 
